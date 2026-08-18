@@ -1,0 +1,61 @@
+```{r Loading in DNA methylation data (IlluminaEPICarray)}
+myLoadminfi <- champ.load(directory = "/path_to_file",
+                          method="minfi",
+                          methValue="B",
+                          autoimpute=TRUE,
+                          filterDetP=FALSE,
+                          ProbeCutoff=0,
+                          SampleCutoff=0.1,
+                          detPcut=0.01,
+                          filterBeads=TRUE,
+                          beadCutoff=0.05,
+                          filterNoCG=TRUE,
+                          filterSNPs=TRUE,
+                          population=NULL,
+                          filterMultiHit=TRUE,
+                          filterXY=FALSE,
+                          force=FALSE,
+                          arraytype="EPIC")
+
+save(myLoadminfi, file ="myLoadminfi_MethylationData.RData")
+```
+
+```{r Preprocessing}
+# RGSet:raw fluorescent intensity data
+RGSet <- myLoadminfi$rgSet 
+
+# MSet: methylation signal data
+MSet <- myLoadminfi$mset 
+
+# phenoData: phenotypic info for each sample
+phenoData <- pData(RGSet) 
+
+# manifest: information about probes 
+manifest <- getManifest(RGSet) 
+
+#normalized Mset
+MSet <- preprocessRaw(RGSet)
+
+# convert methylation data into RatioSet containing beta- and M-values
+RSet <- ratioConvert(MSet, what ="both", keepCN=TRUE) 
+
+# Map RatioSet to genomic coordinates
+GRset <- mapToGenome(RSet)
+
+# Extract Beta values, M-values and copy-number data
+beta <- getBeta(GRset)
+M <- getM(GRset)
+CN <- getCN(GRset) 
+
+# Extract sample names, probe names and phenotype
+sampleNames <- sampleNames(GRset)
+probeNames <- featureNames(GRset)
+pheno <- pData(GRset)
+
+# Extract genomic coordinates/ranges for the probes
+gr <- granges(GRset)
+
+# Extract genomic annotations for the probes
+annotation <- getAnnotation(GRset)
+names(annotation)
+```
