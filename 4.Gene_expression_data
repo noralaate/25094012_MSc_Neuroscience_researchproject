@@ -1,1 +1,186 @@
+```{r Packages}
+library(readr)
+library(readxl)
+library(DESeq2)
+```
+
+```{r RNAseq data}
+#Read in the count data, and transform to data frame from tibble
+FTLDRNAseq <- genes_counts_FTLD_sorted
+FTLDRNAseq <- as.data.frame(FTLDRNAseq)
+
+#Convert gene names (column 1) into row names
+rownames(FTLDRNAseq) <- FTLDRNAseq$gene_name
+FTLDRNAseq <- FTLDRNAseq[,-c(1)]
+
+#Making new dataframe with only neuronal or glial samples
+columns_glial <- grep("G", names(FTLDRNAseq)) #or "N" for neuronal samples
+FTLDRNAseq_glial <- FTLDRNAseq[, columns_glial]
+save(FTLDRNAseq_glial, file="FTLDRNAseq_glial.RData")  
+
+#Sample sheet
+SampleSheet <- read.csv("SampleSheet_G2_final.csv" )
+
+overlap_samples <- SampleSheet$Pool_ID
+valid_samples <- intersect(overlap_samples, colnames(FTLDRNAseq_glial))
+
+#Extracting columns from FTLDseq_neuronal that are in overlap samples
+seq_data1 <- as.matrix(FTLDRNAseq_glial[valid_samples])
+seq_data <- as.data.frame(t(seq_data1)) 
+seq_data$id <- rownames(seq_data) 
+
+seq_data <- merge(seq_data, SampleSheet, by.x=c("id"), by.y=c("Pool_ID"), keep.all=F) 
+rownames(seq_data) <- seq_data$Sample_Name
+
+seq_data2 <- as.data.frame(t(seq_data[,c(2:56982)]))
+  
+save(seq_data2_glial, file="seq_data2_glial_july.RData")
+save(yAdj, file="yAdj_glia.RData")
+
+#Create sample metadata
+colData <- SampleSheet
+rownames(colData) <- colData$Sample_Name
+
+```
+
+```{r DGE list}
+library(edgeR)
+library(limma)
+
+counts <- as.matrix(seq_data2)
+head(counts)
+
+#Digital gene expression list
+
+d0 <- DGEList(counts)
+
+d0 <- calcNormFactors(d0)
+d0
+
+cutoff <- 1
+drop <- which(apply(cpm(d0), 1, max) < cutoff)
+d <- d0[-drop,]
+dim(d) # number of genes left
+
+#For coloring in plotMDS
+colData$Sample_Group <- paste("Null")
+for(i in 1:nrow(colData)){
+  print(i)
+  if(colData$Subtype_Group1[i] == "CTRL"){
+    colData$Sample_Group[i] <- paste("1")
+  }
+  else if(colData$Subtype_Group1[i] == "FTLD-TDPA" | colData$Subtype_Group1[i] == "FTLD-TDPC"){
+    colData$Sample_Group[i] <- paste("2")
+  }
+  else if(colData$Subtype_Group1[i] == "AD"){
+    colData$Sample_Group[i] <- paste("3")
+  }
+}
+
+#Order for right color in plotMDS
+colData_ordered <- colData[colnames(d), ]
+
+#plot
+plotMDS(d, col =colData_ordered$Sample_Group)
+title(main = "MDS Plot of samples before exclusion")
+
+#Removing outliers
+samples_to_exclude <- c("FTLD18_G")
+colData_ordered <- colData_ordered[!(rownames(colData_ordered) %in% samples_to_exclude), ]
+d <- d[, !(colnames(d) %in% samples_to_exclude)]
+save(colData_ordered, file="colData_ordered.RData")
+save(d, file="d.RData")
+
+plotMDS(d, col =colData_ordered$Sample_Group)
+title(main = "MDS Plot of samples after exclusion, glia")
+```
+
+```{r}
+#SVD plot to investigate covariates
+colData_SVD <- SampleSheet
+rownames(colData_SVD) <- colData_SVD$Sample_Name
+
+d_SVD <- d0[-drop,]
+
+colData_SVD <- colData_SVD %>%
+  filter(Pool_ID %in% valid_samples)
+
+colData_ordered_SVD <- colData_SVD[colnames(d_SVD), ]
+
+colData_ordered_SVD$Cell_Group <- NULL
+
+colData_ordered_SVD_columns <- colData_ordered_SVD[, c(
+  "Disease_Group",
+  "Subtype_Group1",
+  "Sex",
+  "Age",
+  "Sentrix_Position",
+  "PMI_h"
+)]
+
+#Removing outliers
+colData_ordered_SVD_columns <- colData_ordered_SVD_columns[!(rownames(colData_ordered_SVD_columns) %in% samples_to_exclude), ]
+
+#SVD pre-adjustment
+champ.SVD(beta=as.data.frame(yAdj) , pd =colData_ordered_SVD_columns)
+```
+
+```{r Model matrix}
+library(tidyverse)
+
+age <- as.numeric(colData_ordered$Age)
+pmi <- as.numeric(colData_ordered$PMI_min)
+
+#Gathering all FTLD subtypes to one
+colData_ordered$Sample_Group_new <- seq_data[rownames(colData_ordered), "Sample_Group"]
+colData_ordered <- colData_ordered %>%
+  mutate(Sample_Group_new = if_else(str_detect(Sample_Group_new, "FTLD"), 
+                                    "FTLD_G", 
+                                    Sample_Group_new))
+
+group <- colData_ordered$Sample_Group_new
+sex <- as.factor(colData_ordered$Sex)
+
+#Regression model
+mm <- model.matrix(~0 + group + age + sex + pmi) 
+#Transform count data using coom and estimate mean-variance relationship
+y <- voom(d, mm, plot = T)
+title(sub="Glial")
+
+#Fit linear model
+fit_expression <- lmFit(y, mm_glial)
+head(coef(fit))
+```
+
+```{r Fitting matrix}
+#Extract fitted coefficients for covariates
+yAdj.fit    <- fit_expression_glia$coefficients[,-c(1:2)] #excluding disease-group coefficients
+
+#Adjusted expression values
+yAdj        <- as.matrix(y) - yAdj.fit %*% t(mm_glial[,-c(1:2)])
+
+#Making cont.matrix 
+
+contMatrix <- makeContrasts("groupFTLD_G-groupCTRL_G", levels = mm)
+
+rownames(contMatrix) <- colnames(fit_expression$coefficients)
+
+#Fit model and apply contrast
+yfit <- lmFit(y, mm)
+yfit <- contrasts.fit(yfit, contrasts=contMatrix)
+efit <- eBayes(yfit)
+plotSA(efit, main="Final model: Mean-variance trend")
+
+summary(decideTests(efit))
+
+top.table <- topTable(efit, sort.by = "P", n = Inf)
+head(top.table, 20)
+save(top.table, file="top.table.RData")
+
+#QQplots
+
+library(qqman)
+qq(top.table$P.Value)
+title("Expected vs. observed P values, glia")
+```
 
