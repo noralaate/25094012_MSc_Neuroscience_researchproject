@@ -1,1 +1,100 @@
+```{r Packages}
+library(lumi)
+library(WGCNA)
+library(limma)
+library(ChAMP)
+library(dplyr)
+```
 
+```{r}
+SampleSheet <- read.csv("SampleSheet_G2_final.csv")
+
+# Converting normalized beta values to M values
+M_matrix <- beta2m(myNorm)
+
+#Annotation step - only keeping probes within genes
+data(probe.features.epic)
+probe.genes<-subset(probe.features, probe.features$feature!="IGR")
+dim(probe.genes)
+
+```
+
+```{r Sample sheet and M matrix in the same order}
+SampleSheet_ordered <- SampleSheet[match(colnames(M_matrix), SampleSheet$Sample_Name), ] 
+save(SampleSheet_ordered, file="SampleSheet_ordered.RData")
+```
+
+```{r SVD pre adjustment}
+#Convert cell type proportions to numeric values
+SampleSheet_ordered$NeuNP <- as.numeric(SampleSheet_ordered$NeuNP)
+SampleSheet_ordered$Sox10P <- as.numeric(SampleSheet_ordered$Sox10P)
+SampleSheet_ordered$DoubleN <- as.numeric(SampleSheet_ordered$DoubleN)
+SampleSheet_ordered$error <- as.numeric(SampleSheet_ordered$error)
+
+#SVD - pre-linear regression
+SampleSheet_ordered$Sentrix_ID <- as.character(SampleSheet_ordered$Sentrix_ID) #character to be treated as categorical variable by champ.SVD
+champ.SVD(beta=as.data.frame(M_matrix), pd = SampleSheet_ordered)
+```
+
+```{r Design matrix}
+#Variables to include as covariates in the regression model
+disease <- factor(SampleSheet_ordered$Disease_Group)
+sex <- factor(SampleSheet_ordered$Sex)
+age <- as.numeric(SampleSheet_ordered$Age)
+NeuNP <- as.numeric(SampleSheet_ordered$NeuNP)
+DoubleN <- as.numeric(SampleSheet_ordered$DoubleN)
+sentrix_ID <- as.factor(SampleSheet_ordered$Sentrix_ID)
+sentrix_position <- factor(SampleSheet_ordered$Sentrix_Position)
+pmi <- as.numeric(SampleSheet_ordered$PMI_h)
+
+#Design matrix for linear regression model
+design <- model.matrix(~0+disease+sex+age+sentrix_position+DoubleN+NeuNP+sentrix_ID+pmi, data=SampleSheet_ordered)
+dim(design)
+```
+
+```{r Fit linear model for each cpg}
+fit <- lmFit(M_matrix,design)
+
+mAdj.fit <- fit$coefficients[,-c(1:3)] #exclude disease-group coefficients
+
+#adjusted M values
+mAdj <- as.matrix(M_matrix) - mAdj.fit %*% t(design[,-c(1:3)])
+save(mAdj, file="mAdj.RData")
+
+#adjusted beta values
+bAdj <- m2beta(mAdj)
+
+#Checking the effect of covariate adjustment with SVD 
+SampleSheet_ordered$Sentrix_ID <- as.factor(SampleSheet_ordered$Sentrix_ID)
+rownames(SampleSheet_ordered) <- SampleSheet_ordered$Sample_Name
+SampleSheet_ordered$Sentrix_ID <- as.character(SampleSheet_ordered$Sentrix_ID)
+champ.SVD(beta=as.data.frame(mAdj) , pd =SampleSheet_ordered)
+```
+
+```{r Fitting to find DMPs}
+#define the disease-group comparison
+contMatrix <- makeContrasts("diseaseFTLD-diseaseCTRL", levels = design)
+#For AD EWAS: contMatrix_AD <- makeContrasts("diseaseAD-diseaseCTRL", levels = design)
+
+#calculate difference between disease and control regression coefficients for each CpG
+fit2 <- contrasts.fit(fit, contMatrix) 
+fit3_new <- eBayes(fit2)
+
+summary(decideTests(fit3_new, adjust.method = "fdr", p.value = 0.05))
+```
+
+```{r DMPs}
+library(ChAMPdata)
+
+annSub <- probe.genes[match(rownames(M_matrix), rownames(probe.genes)),]
+annSub <- annSub[rowSums(is.na(annSub)) < ncol(annSub), ]
+annEPIC <- annSub[intersect(rownames(M_matrix),rownames(annSub)),]
+
+fit3_new <- fit3_new[intersect(rownames(fit3_new),rownames(annEPIC)),]
+
+DMPs <- topTable(fit3_new, num=Inf, coef=1, genelist=annEPIC)
+
+DMPs_top<- topTable(fit3_new, num=Inf, coef=1, genelist=annEPIC, p.value = 1, adjust.method = "BH") #Set p.value = 1 to return all CpGs as no DMPs reached adjusted p < 0.05 (BH)
+
+save(DMPs_top, file="DMPs_top.RData")
+```
