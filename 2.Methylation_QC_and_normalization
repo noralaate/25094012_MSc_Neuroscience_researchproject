@@ -1,1 +1,85 @@
+```{r Initial check for outliers}
+outQC <- minfiQC(MSet, fixOutliers=TRUE, verbose=FALSE)
+p <- plotQC(outQC$qc)
+
+controlStripPlot(RGSet, controls="BISULFITE CONVERSION II")
+
+densityBeanPlot(MSet, sampGroups = phenoData$Sample_Group)
+
+densityPlot(MSet, sampGroups = phenoData$Sample_Group)
+
+library(wateRmelon)
+outliers <- outlyx(MSet, iqr=TRUE, iqrP=2, pc=1,
+                   mv=TRUE, mvP=0.15, plot=TRUE) # one bad sample detected in the glial fraction
+
+write.csv(outliers, file = "outliers_fraction.csv")
+
+write.csv(outQC$qc, file = "minfiQC_fraction.csv")
+
+```
+
+```{r Checking if predicted sex is the same as reported sex}
+library(ChAMP)
+
+predictedSex <- getSex(GRset, cutoff = -2)$predictedSex
+head(predictedSex)
+targets <- read.csv("SampleSheet_G2.csv")
+#names(targets)[6] <- paste("Sex")
+p_sex <- as.data.frame(predictedSex)
+
+targets2 <- cbind(targets, p_sex)
+
+i <- which(targets2$predictedSex != targets2$Sex)
+
+print(rownames(myLoadminfi$pd[i,]))
+
+```
+
+```{r Reloading with samples removed (if any)}
+
+#First remove sample manually from sample sheet
+
+#Reloading
+myLoad <- champ.load(directory = "/path_to_file/",
+                     methValue="B",
+                     filterDetP=TRUE,
+                     detPcut=0.01,
+                     filterBeads=TRUE,
+                     beadCutoff=0.05,
+                     filterNoCG=TRUE,
+                     filterSNPs=TRUE,
+                     population=NULL,
+                     filterMultiHit=TRUE,
+                     filterXY=TRUE,
+                     arraytype = "EPIC")
+
+```
+
+```{r QC pre-normalization}
+
+champ.QC(resultsDir = "./name_of_file/", beta= myLoad$beta, densityPlot = TRUE, 
+         mdsPlot = TRUE, dendrogram = TRUE, pheno = myLoad$pd$Sample_Group)
+
+```
+
+```{r Normalization with BMIQ}
+
+myNorm <- champ.norm(beta=myLoad$beta,
+                     rgSet=myLoad$rgSet,
+                     mset=myLoad$mset,
+                     resultsDir="./name_of_file/",
+                     method="BMIQ",
+                     plotBMIQ=TRUE,
+                     arraytype="EPIC",
+                     cores=1)
+save(myNorm, file = "myNorm.RData")
+
+```
+
+```{r QC post-normalization}
+
+champ.QC(resultsDir = "./name_of_file/", beta= myNorm, densityPlot = TRUE, 
+         mdsPlot = TRUE, dendrogram = TRUE, pheno = myLoad$pd$Sample_Group)
+
+```
 
