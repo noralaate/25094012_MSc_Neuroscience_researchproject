@@ -1,1 +1,152 @@
+```{r Data frame with methylation and gene expression values for all CpG associated with a gene}
+library(tidyr)
+library(tibble)
 
+#Transpose adjusted methylation and gene expression data for use in the function
+mAdj_for_correlation <- t(mAdj)
+yAdj_for_correlation <- t(yAdj)
+
+
+correlation_df <- function(genename) {
+  
+  #Extract CpGs associated with selected gene
+  CpGs <- DMPs_top$cpg[DMPs_top$gene == genename]
+  
+  #Adjusted m values for selected CpGs
+  mAdj_new <- mAdj_for_correlation[, colnames(mAdj_for_correlation) %in% CpGs]
+  df_methylation_correlation <- as.data.frame(mAdj_new) %>%
+    rownames_to_column("Sample") %>%
+    pivot_longer(
+      cols = -Sample,
+      names_to = "cpg",
+      values_to = "M_value"
+    )
+  
+  #Adjusted gene expression values for selected CpGs 
+  yAdj_new <- yAdj_for_correlation[, genename]
+  df_expression_correlation <- as.data.frame(yAdj_new) %>%
+    rownames_to_column("Sample") %>%
+    pivot_longer(
+      cols = -Sample,
+      names_to = "Gene",
+      values_to = "Expression_value"
+    ) %>%
+    mutate(Gene = genename)
+  
+  
+  #Combine methylation and gene expression data by sample
+  new_df <- merge(df_methylation_correlation, df_expression_correlation, by = "Sample")
+  new_df <- new_df[order(new_df$cpg, new_df$Sample), ]
+  head(new_df)
+  
+  return(new_df)
+}
+
+```
+
+```{r Data frame containing CpG-gene pairs with significant differential methylation and expression (p < 0.05)}
+
+merged_methylation_genes <- merge(DMPs_top, top.table, by.x=c("gene"), by.y=c("Gene"), keep.all=F)
+save(merged_methylation_genes, file="merged_methylation_genes.RData")
+
+merged_sig <- merged_methylation_genes %>%
+  filter(P.Value.x < 0.05, P.Value.y < 0.05)
+```
+
+```{r Data frame with methylation and gene expression values for all sig CpG sites}
+library(ggrepel)
+
+correlation_df_long <- function(df) {
+  
+  #Extract CpGs from input data frame
+  CpGs <- df$cpg
+  
+  #Adjusted m values for selected CpGs
+  mAdj_new <- mAdj_for_correlation[, colnames(mAdj_for_correlation) %in% CpGs]
+  df_methylation_correlation <- as.data.frame(mAdj_new) %>%
+    rownames_to_column("Sample") %>%
+    pivot_longer(
+      cols = -Sample,
+      names_to = "cpg",
+      values_to = "M_value"
+    )
+  
+  genename <- df$gene
+  
+  #Adjusted gene expression values for selected CpGs
+  yAdj_new <- yAdj_for_correlation[, colnames(yAdj_for_correlation) %in% genename]
+  df_expression_correlation <- as.data.frame(yAdj_new) %>%
+    rownames_to_column("Sample") %>%
+    pivot_longer(
+      cols = -Sample,
+      names_to = "Gene",
+      values_to = "Expression_value"
+    )
+  
+  mapping_df <- df %>%
+    dplyr::select(gene, cpg)
+  
+  #Combine methylation and gene expression data by sample and gene
+  df_methylation_correlation <- df_methylation_correlation %>%
+    left_join(mapping_df, by="cpg")
+  names(df_methylation_correlation)[names(df_methylation_correlation) == "gene"] <- "Gene"
+  new_df <- merge(df_methylation_correlation, df_expression_correlation, by = c("Sample", "Gene"))
+  new_df <- new_df[order(new_df$cpg, new_df$Sample), ]
+
+  
+  return(new_df)
+}
+
+correlation_df_all <- correlation_df_long(merged_sig)
+save(correlation_df_all, file="correlation_df_all.RData")
+```
+
+```{r Pearson correlation of sig CpGs}
+library(tidyverse)
+
+corr_coef_df_long <- function(df) {
+  
+  #Pearson correlation for control samples
+  data_corr1 <- df %>%
+    filter(grepl("CTRL", Sample)) %>%
+    group_by(cpg) %>%
+    summarise(
+      corr_test = list(cor.test(M_value, Expression_value, method = "pearson"))
+    ) %>%
+    mutate(
+      corr_coef_CTRL = map_dbl(corr_test, ~ .x$estimate),
+      p_value_CTRL = map_dbl(corr_test, ~ .x$p.value)
+    )
+  data_corr1 <- as.data.frame(data_corr1)
+  data_corr1 <- data_corr1[, -c(2)]
+  
+  #Pearson correlation for FTLD samples
+  data_corr2 <- df %>%
+    filter(grepl("FTLD", Sample)) %>%
+    group_by(cpg) %>%
+    summarise(
+      corr_test = list(cor.test(M_value, Expression_value, method = "pearson"))
+    ) %>%
+    mutate(
+      corr_coef_FTLD = map_dbl(corr_test, ~ .x$estimate),
+      p_value_FTLD = map_dbl(corr_test, ~ .x$p.value)
+    )
+  data_corr2 <- as.data.frame(data_corr2)
+  data_corr2 <- data_corr2[, -c(2)]
+  
+  #Combine correlation results for controls and FTLD samples
+  data_corr <- merge(data_corr1, data_corr2, by = "cpg")
+  
+  #Add gene names associated with CpGs
+  genename <- df %>%
+    dplyr::select(cpg, Gene) %>%
+    unique()
+  
+  data_corr <- left_join(genename, data_corr)
+  
+  return(data_corr)
+}
+
+corr_coeff_df <- corr_coef_df_long(correlation_df_all)
+save(corr_coeff_df, file="corr_coeff_df.RData")
+```
