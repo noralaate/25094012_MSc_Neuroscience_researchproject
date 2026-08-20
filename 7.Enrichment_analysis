@@ -1,1 +1,155 @@
+```{r}
+geneInfoK_glial <- read.csv("geneInfoK_glia.csv")
 
+#or
+
+geneInfoK_neuronal <- read.csv("geneInfoK_neuronal.csv")
+```
+
+#Using the Glial-blue module as an example, but code can be used for any module 
+
+```{r Extracting the module from geneInfoK}
+library(dplyr)
+
+blue_module <- subset(geneInfoK_glial, moduleColor =="blue")
+blue_module <- blue_module %>%
+  dplyr::select(Probes, geneSymbol, CHR, feature, cgi, moduleColor, GS.Disease_Status, p.GS.Disease_Status, MM.blue, p.MM.blue)
+
+blue_genes <- unique(blue_module$geneSymbol)
+blue_genes <- as.data.frame(blue_genes)
+write.csv(blue_genes, "blue_genes.csv", row.names = FALSE)
+
+blue_probes <- unique(blue_module$Probes)
+blue_probes <- as.data.frame(blue_probes)
+write.csv(blue_probes, "blue_probes.csv", row.names = FALSE)
+
+```
+
+```{r enrichR}
+library(enrichR)
+
+#Define the enrichr databases to test
+dbs <- c('GO_Biological_Process_2023','GO_Cellular_Component_2023','GO_Molecular_Function_2023')
+
+#Split gene symbols into separate lists
+geneInfoK_glial_lists <- split(geneInfoK_glial$geneSymbol, geneInfoK_glial$moduleColor)
+
+#enrichR on all modules in the network
+enrich_results_glia <- lapply(geneInfoK_glial_lists, function(genes) {
+  enrichr(genes, dbs)
+})
+
+#Extract enrichment results for the blue module
+enrich_blue <- enrich_results_glia$blue
+
+enrich_blue_BP <- enrich_blue[["GO_Biological_Process_2023"]]
+```
+
+```{r g:Profiler}
+
+library(gprofiler2)
+
+#Convert blue module gene list to a vector for g:Profiler
+blue_genes_list <- as.vector(blue_genes$blue_genes)
+
+#Functional enrichment analysis with human genome as reference organism
+gost_blue <- gost(query = blue_genes_list, organism = "hsapiens")
+
+gost_blue_results <- gost_blue$result
+gost_blue_results_BP <- gost_blue_results[gost_blue_results$source == "GO:BP",]
+
+```
+
+```{r Fisher's exact test}
+
+geneInfoK_glial <- read.csv("geneInfoK_glia.csv") #or geneInfoK_neuronal
+
+modules_fishers_methylation <- unique(geneInfoK_glial$moduleColor)
+
+#This function is for the glial fraction, but a similar function was used for the neuronal fraction
+##gene_df must have this structure: [1] gene symbol, [2] full gene name, [3] uniprot, [4] go term
+fishers_modules <- function(gene_df){
+  
+  Fisher_results_list <- list() 
+  
+  for(i in modules_fishers_methylation[1:29]) {
+    
+    module_df <- subset(geneInfoK_glial, moduleColor == i)
+    
+    #finding the genes in the module
+    genes_module <- unique(module_df[, 3])
+    length_module <- length(genes_module)
+  
+   #finding the genes in gene list
+    genelist <- gene_df[,1]
+    length_list <- length(genelist)
+  
+    #genes in common
+    common <- intersect(genelist, genes_module)
+    length(common)
+  
+    #the rest of the gene list
+    rest_genes <- (length_list - length(common))
+  
+    #total genes
+    total_genes <- length(unique(geneInfoK_glial$geneSymbol))
+  
+    #build the df
+    df <- data.frame("In module" = c(length(common), (length_module - length(common))), "Not in module" = c(rest_genes, (total_genes - (length_module - length(common)))), row.names = c("In genelist", "Not in genelist"))
+  
+    #and then fishers
+  
+    fish_result <- fisher.test(df)
+    
+    Fisher_p_val <- fish_result$p.value
+    Fisher_confupper <- fish_result$conf.int[2]
+    Fisher_conflower <- fish_result$conf.int[1]
+    Fisher_OR <- fish_result$estimate
+    Fisher_module <- paste(i)
+    Fisher_df <- cbind(Fisher_p_val,Fisher_conflower, Fisher_confupper, Fisher_OR, Fisher_module)
+    
+    Fisher_results_list[[i]] <- Fisher_df
+    
+    }
+  
+  results <- as.data.frame(do.call(rbind, Fisher_results_list))
+  
+  return(results)
+  
+}
+```
+
+```{r Feature enrichment}
+
+fishers_feature <- function(module, feature_of_interest) {
+  
+  #finding the amount of features
+  
+  yes_feature <- nrow(module[module[, 4] == feature_of_interest, ])
+  
+  no_feature <- nrow(module[!module[, 4] == feature_of_interest, ])
+  
+  #then for the background
+  
+  yes_all_1 <- nrow(geneInfoK_neuronal[geneInfoK_neuronal[, 5] == feature_of_interest, ])
+  
+  no_all_1 <- nrow(geneInfoK_neuronal[!geneInfoK_neuronal[, 5] == feature_of_interest, ])
+  
+  #then removing the module contribution
+  yes_all <- yes_all_1 - yes_feature
+  
+  no_all <- no_all_1 - no_feature
+  
+  #build the df
+  df <- data.frame("Feature" = c(yes_feature, yes_all), "Not feature" = c(no_feature, no_all), row.names = c("In module", "Not in module"))
+  
+  print(df)
+  
+  #and then fishers
+  
+  fish_result <- fisher.test(df)
+  print(fish_result)
+  
+}
+
+```
