@@ -1,1 +1,723 @@
+```{r Figure 1}
 
+#Figure 1a
+library(qqman)
+
+DMPs_top_glia$cpg <- rownames(DMPs_top_glia)
+
+nominal_threshold <- 0.01
+
+manhattan(DMPs_top_glia, chr="CHR", bp="MAPINFO", snp="cpg", p="P.Value", suggestiveline = FALSE, ylim = c(0, max(-log10(DMPs_top_glia$P.Value)) + 4), genomewideline = FALSE, cex.axis = 1.2, cex.lab = 1.2)
+abline(h = -log10(nominal_threshold), col = "red", lwd = 2)
+title(main="DMPs - Glial fraction")
+
+#Figure 1b
+DMPs_top_neuronal$cpg <- rownames(DMPs_top_neuronal)
+
+manhattan(DMPs_top_neuronal, chr="CHR", bp="MAPINFO", snp="cpg", p="P.Value", ylim = c(0, max(-log10(DMPs_top_neuronal_new$P.Value)) + 4), suggestiveline = FALSE, genomewideline = FALSE, cex.axis = 1.2, cex.lab = 1.2)
+abline(h = -log10(nominal_threshold), col = "red", lwd = 2)
+title(main="DMPs - Neuronal fraction")
+
+#Figure 1c
+library(ggplot2)
+
+feature_neuronal <- DMPs_top_neuronal[, c(5, 6, 12, 15)]
+feature_neuronal$Type <- "none"
+feature_neuronal$Type[feature_neuronal$logFC > 0] <- "Neuron hypermethylated"
+feature_neuronal$Type[feature_neuronal$logFC < 0] <- "Neuron hypomethylated"
+
+feature_glial <- DMPs_top_glia[, c(5, 6, 12, 18)]
+feature_glial$Type <- "none"
+feature_glial$Type[feature_glial$logFC > 0] <- "Glia hypermethylated"
+feature_glial$Type[feature_glial$logFC < 0] <- "Glia hypomethylated"
+
+feature_df <- bind_rows(feature_neuronal, feature_glial)
+
+feature_df_overall <- feature_df %>%
+  separate(Type, into = c("Fraction", "Methylation"), sep = " ", extra = "merge") %>%
+  mutate(
+    Methylation = case_when(
+      str_detect(Methylation, "hyper") ~ "Hypermethylated",
+      str_detect(Methylation, "hypo") ~ "Hypomethylated",
+      TRUE ~ NA_character_
+    )
+  )
+
+ggplot(feature_df_overall, aes(x=Fraction, fill = Methylation)) +
+  geom_bar() +
+  scale_fill_manual(values = c(
+    "Hypermethylated" = "salmon",
+    "Hypomethylated" = "skyblue3"
+  )) +
+  theme_bw() +
+  theme(
+  axis.text = element_text(size = 12, colour = "black"),
+  axis.title = element_text(size = 14),
+  legend.text = element_text(size = 10),
+  legend.title = element_text(size = 12),
+  plot.title = element_text(size = 16)
+) +
+  labs(title = "Methylation in fractions")
+
+
+#Figure 1d
+ggplot(feature_df, aes(x=feature, fill = Type)) +
+  geom_bar(position="dodge") +
+  theme_bw() +
+  scale_fill_manual(values = c(
+    "Neuron hypermethylated" = "red2",
+    "Neuron hypomethylated" = "blue4",
+    "Glia hypermethylated" = "salmon",
+    "Glia hypomethylated" = "skyblue3"
+  )) +
+  theme(
+  axis.text = element_text(size = 9, colour = "black"),
+  axis.title = element_text(size = 14),
+  legend.text = element_text(size = 10),
+  legend.title = element_text(size = 12),
+  plot.title = element_text(size = 16)
+) +
+  labs(title = "Feature overview")
+```
+
+```{r Figure 2}
+library(VennDiagram)
+
+#Figure 2a
+
+neuronal_venn_probes <- DMPs_top_neuronal %>%
+  arrange(P.Value) %>%
+  pull(cpg)
+
+glial_venn_probes <- DMPs_top_glia_001 %>%
+  arrange(P.Value) %>%
+  pull(cpg)
+
+##plot
+grid.newpage()
+venn_overlapping_probes <- venn.diagram(
+  x = list(neuronal_venn_probes, glial_venn_probes),
+  category.names = c("Neuronal", "Glial"),
+  filename = NULL,
+  output=FALSE,
+  cat.cex = FALSE,   
+  cex = 1.7   
+)
+grid.draw(venn_overlapping_probes)
+
+#Figure 2b
+
+neuronal_venn_genes<- DMPs_top_neuronal %>%
+  arrange(P.Value) %>%
+  pull(gene)
+
+glial_venn_genes <- DMPs_top_glia_001 %>%
+  arrange(P.Value) %>%
+  pull(gene)
+
+##plot
+grid.newpage()
+venn_overlapping_genes <- venn.diagram(
+  x = list(neuronal_venn_genes, glial_venn_genes),
+  category.names = c("Neuronal", "Glial"),
+  filename = NULL,
+  output=FALSE,
+  cat.cex = FALSE,  
+  cex = 1.7        
+)
+grid.draw(venn_genes)
+
+#Figure 2c
+library(pheatmap)
+
+##Creating specific adjusted m matrixes
+mAdj_neuronal_ctrl <- as.data.frame(mAdj_neuronal2)
+mAdj_neuronal_ctrl <- mAdj_neuronal_ctrl[, grep("CTRL", colnames(mAdj_neuronal_ctrl))]
+
+mAdj_neuronal_ftld <- as.data.frame(mAdj_neuronal2)
+mAdj_neuronal_ftld <- mAdj_neuronal_ftld[, grep("FTLD", colnames(mAdj_neuronal_ftld))]
+
+mAdj_glial_ctrl <- as.data.frame(mAdj_glia)
+mAdj_glial_ctrl <- mAdj_glial_ctrl[, grep("CTRL", colnames(mAdj_glial_ctrl))]
+
+mAdj_glial_ftld <- as.data.frame(mAdj_glia)
+mAdj_glial_ftld <- mAdj_glial_ftld[, grep("FTLD", colnames(mAdj_glial_ftld))]
+
+##Defining overlapping probes
+intersect_glial_neuronal_probes <- DMPs_top_glia[rownames(DMPs_top_glia) %in% (intersect(DMPs_top_neuronal$cpg, DMPs_top_glia$cpg)), ]
+
+##Filter for overlapping probes
+mAdj_neuronal_ctrl <- mAdj_neuronal_ctrl[rownames(mAdj_neuronal_ctrl) %in% rownames(intersect_glial_neuronal_probes), ]
+mAdj_neuronal_ftld <- mAdj_neuronal_ftld[rownames(mAdj_neuronal_ftld) %in% rownames(intersect_glial_neuronal_probes), ]
+mAdj_glial_ctrl <- mAdj_glial_ctrl[rownames(mAdj_glial_ctrl) %in% rownames(intersect_glial_neuronal_probes), ]
+mAdj_glial_ftld <- mAdj_glial_ftld[rownames(mAdj_glial_ftld) %in% rownames(intersect_glial_neuronal_probes), ]
+
+##Joining the individual m matrixes
+neuron_glia_heatmap <- mAdj_neuronal_ctrl %>% 
+  left_join(mAdj_neuronal_ftld, by="cpg") %>%
+  left_join(mAdj_glial_ctrl, by="cpg") %>%
+  left_join(mAdj_glial_ftld, by="cpg")
+
+neuron_glia_heatmap_matrix <- neuron_glia_heatmap %>%
+  tibble::column_to_rownames("cpg") %>%
+  as.matrix()
+
+pheatmap(neuron_glia_heatmap_matrix, fontsize = 6,
+  fontsize_row = 4,
+  fontsize_col = 8
+)
+```
+
+```{r Figure 3}
+
+#Figure 3a
+library(VennDiagram)
+
+##neuronal
+AD_venn_probes <- DMPs_top_AD_neuronal_new_001 %>%
+  arrange(P.Value) %>%
+  pull(cpg)
+
+AD_venn_genes <- DMPs_top_AD_neuronal_new_001 %>%
+  arrange(P.Value) %>%
+  pull(gene)
+
+FTLD_venn_probes <- DMPs_top_neuronal_new_001 %>%
+  arrange(P.Value) %>%
+  pull(cpg)
+
+FTLD_venn_genes <- DMPs_top_neuronal_new_001 %>%
+  arrange(P.Value) %>%
+  pull(gene)
+ 
+# Chart neuronal
+grid.newpage()
+venn_neuronal_AD <- venn.diagram(
+  x = list(AD_venn_probes, FTLD_venn_probes),
+  category.names = c("AD", "FTLD"),
+  filename = NULL,
+  output=FALSE,
+  cat.cex = FALSE,   
+  cex = 1.7
+)
+grid.draw(venn_neuronal_AD)
+
+#Figure 3b
+##glial
+AD_venn_probes_g <- DMPs_top_AD_g_001 %>%
+  arrange(P.Value) %>%
+  pull(cpg)
+
+AD_venn_genes_g <- DMPs_top_AD_g_001 %>%
+  arrange(P.Value) %>%
+  pull(gene)
+
+FTLD_venn_probes_g <- DMPs_top_glia_001 %>%
+  arrange(P.Value) %>%
+  pull(cpg)
+
+FTLD_venn_genes_g <- DMPs_top_glia_001 %>%
+  arrange(P.Value) %>%
+  pull(gene)
+
+# Chart glial
+grid.newpage()
+venn_neuronal_AD_g <- venn.diagram(
+  x = list(AD_venn_probes_g, FTLD_venn_probes_g),
+  category.names = c("AD", "FTLD"),
+  filename = NULL,
+  output=FALSE,
+  cat.cex = FALSE,   
+  cex = 1.7       
+)
+grid.draw(venn_neuronal_AD_g)
+title(main="Glial fraction: FTLD vs. AD")
+
+#Figure 3c
+##Matrix with madj for ftld and ad neuronal
+mAdj_neuronal_AD <- as.data.frame(mAdj_neuronal2)
+AD_neuronal_samples <- c("AD1_N", "AD2_N", "AD3_N", "AD5_N", "AD6_N", "AD7_N")
+mAdj_neuronal_AD <- mAdj_neuronal_AD[, colnames(mAdj_neuronal_AD) %in% AD_neuronal_samples]
+mAdj_neuronal_AD$cpg <- rownames(mAdj_neuronal_AD)
+
+mAdj_neuronal_ftld <- mAdj_neuronal_ftld[, grep("FTLD", colnames(mAdj_neuronal_ftld))]
+
+#Joining m values from AD and FTLD
+matrix_FTLD_AD_neuronal <- mAdj_neuronal_ftld %>%
+  left_join(mAdj_neuronal_AD, by="cpg")
+matrix_FTLD_AD_neuronal <- matrix_FTLD_AD_neuronal[, -14]
+matrix_FTLD_AD_neuronal <- as.matrix(matrix_FTLD_AD_neuronal)
+
+pheatmap::pheatmap(matrix_FTLD_AD_neuronal, fontsize = 8)
+
+#Figure 3d
+##Matrix with madj for ftld and ad glial
+mAdj_glial_AD <- as.data.frame(mAdj_glia)
+AD_glial_samples <- c("AD3_G", "AD4_G", "AD5_G", "AD6_G", "AD8_G")
+mAdj_glial_AD <- mAdj_glial_AD[, colnames(mAdj_glial_AD) %in% AD_glial_samples]
+mAdj_glial_AD$cpg <- rownames(mAdj_glial_AD)
+
+mAdj_glial_ftld <- mAdj_glial_ftld[, grep("FTLD", colnames(mAdj_glial_ftld))]
+
+#Joining m values from AD and FTLD
+matrix_FTLD_AD_glial <- mAdj_glial_ftld %>%
+  left_join(mAdj_glial_AD, by="cpg")
+matrix_FTLD_AD_glial <- matrix_FTLD_AD_glial[, -20]
+matrix_FTLD_AD_glial <- as.matrix(matrix_FTLD_AD_glial)
+
+pheatmap::pheatmap(matrix_FTLD_AD_glial, fontsize = 8)
+
+```
+
+```{r Figure 4}
+
+#Figure 4a
+library(ggpubr)
+library(gridExtra)
+library(grid)
+
+correlation_plot <- function(cpgname, df, genename) {
+    
+  #Control
+  plotdata1 <- df %>%
+    filter(cpg == cpgname, grepl("CTRL", Sample))
+  
+  plot1 <- ggplot(plotdata1, aes(x=M_value, y=Expression_value)) +
+    geom_point() +
+    geom_text_repel(aes(label=as.character(Sample)),hjust=0,vjust=0, max.overlaps = 20, size = 5) +
+    geom_smooth(method=lm, color="blue", se=FALSE) +
+    stat_cor(method = "pearson", label.x.npc = 0.1, label.y.npc = "top", color="blue", size=5) +
+    theme_classic() +
+  theme(
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14)
+  )
+  
+  #FTLD
+  plotdata2 <- df %>%
+    filter(cpg == cpgname, grepl("FTLD", Sample))
+  
+  fit_correlation2 <- lm(Expression_value ~ M_value, data=plotdata2)
+  
+  plot2 <- ggplot(plotdata2, aes(x=M_value, y=Expression_value)) +
+    geom_point() +
+    geom_text_repel(aes(label=as.character(Sample)),hjust=0,vjust=0, max.overlaps = 20, size = 5) +
+    geom_smooth(method=lm, color="red", se=FALSE) +
+    stat_cor(method = "pearson", label.x.npc = 0.65, label.y.npc = "top", color="red", size=5) +
+    theme_classic() +
+  theme(
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14)
+  )
+  
+  #Control and FTLD in the same plot
+  grid.arrange(plot1, plot2, ncol = 2, top = textGrob(label = paste("Correlation for", cpgname, "-", genename),
+    gp = gpar(fontsize = 14)))
+  
+}
+
+correlation_plot("cg01988009", df_NR1H2, "NR1H2")
+
+#Figure 4b
+##Packages
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(stringr)
+library(grid)
+
+#Function creating box plots of expression values for selected gene
+boxplot_genes_multiple <- function(df1, df2, genename) {
+  
+  #Data frame name as text
+  df_name1 <- deparse(substitute(df1))
+  
+  #Naming plot based on data frame
+  title_text1 <- if(grepl("neuronal", df_name1, ignore.case = TRUE)) {
+    "Neuronal fraction:"
+  } else {
+    "Glial fraction:"  
+  }
+  
+  #Data frame for use in plot
+  plot_data1 <- df1 %>%
+    filter(rownames(df1) == genename) %>%
+    pivot_longer(
+      cols = starts_with(c("CTRL", "FTLD")),
+      names_to = "Group",        # create a group where the sample names get collected
+      names_pattern = "(CTRL|FTLD)", # looking for CTRL or FTLD in the name
+      values_to = "Expression")
+  
+  #Box plot
+  plot1 <- ggplot(plot_data1, aes(x = Group, y = Expression, color = Group)) + 
+    geom_boxplot(outlier.shape = NA, fill= NA) +
+    geom_jitter(width = 0.2, alpha = 0.4, size = 2) + 
+    theme_classic() + 
+    labs(x = "group", y = "Transcript expression", title = title_text1) +
+    theme(
+      plot.title = element_text(
+        hjust = 0.5,            
+        size = 14             
+      )
+    )
+  
+  #Data frame name as text
+  df_name2 <- deparse(substitute(df2))
+  
+  #Naming plot based on data frame
+  title_text2 <- if(grepl("neuronal", df_name2, ignore.case = TRUE)) {
+    "Neuronal fraction:"
+  } else {
+    "Glial fraction:"  
+  }
+  
+  #Data frame for use in plot
+  plot_data2 <- df2 %>%
+    filter(rownames(df2) == genename) %>%
+    pivot_longer(
+      cols = starts_with(c("CTRL", "FTLD")),
+      names_to = "Group",        # create a group where the sample names get collected
+      names_pattern = "(CTRL|FTLD)", # looking for CTRL or FTLD in the name
+      values_to = "Expression")
+  
+  #Box plot
+  plot2 <- ggplot(plot_data2, aes(x = Group, y = Expression, color = Group)) + 
+    geom_boxplot(outlier.shape = NA, fill= NA) +
+    geom_jitter(width = 0.2, alpha = 0.4, size = 2) + 
+    theme_classic() + 
+    labs(x = "group", y = "Transcript expression", title = title_text2) +
+    theme(
+      plot.title = element_text(
+        #face = "bold",           # Bold
+        hjust = 0.5,            # Midtstilt (0.5 = senter)
+        size = 14               # Større tekst (valgfritt)
+      )
+    )
+  
+  #Both box plots in same plot
+  grid.arrange(plot1, plot2, ncol = 2, top = textGrob(label = paste("Expression of", genename),
+    gp = gpar(fontsize = 14)
+    
+  ))
+  
+}
+
+boxplot_genes_multiple(seq_data2_glial, seq_data2_neuronal, "NR1H2")
+
+```
+
+```{r Figure 5}
+#This was done for both the glial and neuronal fraction
+##Display the correlation values within a heatmap plot
+
+labeledHeatmap(Matrix = moduleTraitCorK,
+               xLabels = names(datTraits0_K),
+               yLabels = names(MEsK),
+               ySymbols = names(MEsK),
+               colorLabels = FALSE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrixK,
+               setStdMargins = TRUE,
+               cex.text = 1,
+               cex.lab = 1,
+               zlim = c(-1,1),
+               main = paste("Module-trait relationships (k-means) Glia"))
+
+dev.off()
+
+```
+
+```{r Figure 6}
+#EWCE - cell enrichment 
+library(EWCE)
+library(ewceData)
+library(SingleCellExperiment)
+library(textshape)
+library(readxl)
+library(ggplot2)
+
+library(ewceData)
+
+# Load the single cell data
+ctd <- ewceData::ctd()
+
+geneInfo <- geneInfoK
+bg = geneInfo$geneSymbol
+bg <- as.character(bg)
+modules <- allsigmods #lists of all significant modules
+x_results_list <- list()
+x_results2 <- list()
+
+for(i in modules[1:length(unique(allsigmods))]){
+  print(i)
+  x <- subset(geneInfo, moduleColor == i)
+  x_genes <- x[,2]
+print(length(x_genes))
+ #Running the enrichment 
+  reps=1000
+  subCellStatus=TRUE 
+  x_results <- EWCE::bootstrap_enrichment_test(sct_data = ctd,
+                                                sctSpecies = "mouse",
+                                                genelistSpecies = "human",
+                                                hits = x_genes, 
+                                                reps = reps,
+                                                bg=bg,
+                                                annotLevel = 1)
+  x_results$results$Module <- paste(i)
+  x_results_list[[i]] <- x_results
+  x_results2[[i]] <- x_results$results
+  }
+
+EWCE <- do.call(rbind, x_results_list)
+EWCE_2 <- do.call(rbind, x_results2)
+
+
+
+EWCE_2$list = paste(EWCE_2$Module)
+
+
+EWCE_results <- EWCE_2
+EWCE_results$significant <- paste("Null")
+
+for(i in 1:nrow(EWCE_results)){
+  if(EWCE_results$q[i] < 0.05){
+    EWCE_results$significant[i] <- paste("Significant")
+  }
+  else if(EWCE_results$q[i] > 0.05){
+    EWCE_results$significant[i] <- paste("Not significant")
+  }
+}
+
+EWCE_results$SD <- EWCE_results$sd_from_mean
+for(i in 1:nrow(EWCE_results)){
+  if(EWCE_results$sd_from_mean[i] >0){
+    EWCE_results$SD[i] <- paste(EWCE_results$sd_from_mean[i])
+  }
+  else if(EWCE_results$sd_from_mean[i] < 0){
+    EWCE_results$SD[i] <- paste(0)
+  }
+}
+EWCE_results$SD <- as.numeric(EWCE_results$SD)
+
+ggplot(EWCE_results, aes(x=Module, y=CellType, color = significant, size = SD))+ theme_bw() + theme(plot.title = element_text(hjust = 0.5)) + ggtitle("EWCE - Glia") + geom_point()+ theme(axis.text.x = element_text(angle=45, hjust=1))+ scale_color_manual(values = c("Significant" = "midnightblue","Not significant"="lightblue"))
+
+```
+
+```{r Figure 7 - Figure 8}
+#Figure 7 based on geneInfoK_glia and Figure 8 based on geneInfoK_neuronal
+#code can be used for both fractions
+
+#Figure 7a, c, e + 8a
+##Cytoscape - only looking at the top 25 genes with highest modulemembership for the module
+top25_probes <- geneInfoK[order(geneInfoK$MM.blue, decreasing = TRUE), ][1:25,]
+module_probes_blue <- top25_probes$Probes
+
+datExpr_blue <- datExpr[, colnames(datExpr) %in% module_probes_blue]
+
+probes_blue <- colnames(datExpr_blue)
+
+TOM <- TOMsimilarityFromExpr(datExpr_blue, power = 10)
+dimnames(TOM) <- list(probes_blue, probes_blue)
+
+#mapping probes to genes
+probe_gene_blue <- geneInfoK[match(module_probes_blue, geneInfoK$Probes), "geneSymbol"]
+nodeData <- data.frame(
+  probes = module_probes_blue,
+  geneSymbol = probe_gene_blue,
+  moduleColor = "blue"
+)
+
+exportNetworkToCytoscape(
+  TOM,
+  edgeFile = paste0("Cytoscape_edges_blue.txt"),
+  nodeFile = paste0("Cytoscape_nodes_blue.txt"),
+  nodeAttr = nodeData,
+  weighted = TRUE,
+  threshold = 0.02,
+  nodeNames = nodeData$probes,
+  altNodeNames = nodeData$geneSymbol)
+
+#Figure 7b, d, f + 8b
+library(ggplot2)
+library(stringr)
+
+enrich_blue <- enrich_results_glia$blue
+
+enrich_blue_BP <- enrich_blue[["GO_Biological_Process_2023"]]
+
+enrich_blue_BP$Terms <- str_wrap(enrich_blue_BP$Term, width = 35)
+
+p <- ggplot(enrich_blue_BP[1:10,], aes(x = Odds.Ratio, y = Terms)) +
+  geom_point(aes(size = Combined.Score, color = Adjusted.P.value)) +
+  xlim(1, 4.5) +
+  scale_color_gradient(
+    low = "royalblue4",
+    high = "lightblue2"
+  ) +
+  theme_bw() +
+  labs(title="EnrichR: Blue module") +
+  theme(
+    axis.text.y = element_text(
+      color = "black",
+      size = 12
+    ),
+    axis.text.x = element_text(
+      color = "black",
+      size = 12
+    ),
+    axis.title = element_text(
+      color = "black",
+      size = 12
+    ),
+    plot.title = element_text(
+      color = "black",
+      size = 12,
+      face = "bold"
+    ))
+
+ggsave("enrich_blue_BP7.pdf", p, width = 6, height = 7)
+
+```
+
+```{r Figure 9}
+fishers_plot <- function(fisher_df){
+  
+  df_name <- deparse(substitute(fisher_df))
+  
+  fisher_df <- fisher_df[order(fisher_df$Fisher_OR, decreasing = TRUE), ]
+  
+  fisher_df$Fisher_p_val <- as.numeric(fisher_df$Fisher_p_val)
+  fisher_df$Fisher_OR <- as.numeric(fisher_df$Fisher_OR)
+  
+  fisher_df$significance <- "none"
+  fisher_df$significance[fisher_df$Fisher_p_val > 0.5] <- "P Value: > 0.50"
+  fisher_df$significance[fisher_df$Fisher_p_val > 0.25 & fisher_df$Fisher_p_val < 0.5 ] <- "P Value: 0.25 - 0.50"
+  fisher_df$significance[fisher_df$Fisher_p_val > 0.05 & fisher_df$Fisher_p_val < 0.25 ] <- "P Value: 0.05 - 0.25"
+  fisher_df$significance[fisher_df$Fisher_p_val < 0.05] <- "P Value: < 0.05"
+  
+  
+  fisher_plot <- ggplot(fisher_df, aes(x= reorder(Fisher_module, Fisher_OR), y=Fisher_OR, fill = significance)) +
+  geom_bar(stat = "identity", width = 0.8) +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("dodgerblue4", "skyblue3", "lightblue", "grey"), 
+    breaks = c(
+      "P Value: < 0.05",
+      "P Value: 0.05 - 0.25",
+      "P Value: 0.25 - 0.50",
+      "P Value: > 0.50"
+    )) +
+  ylab("Odds ratio") +
+  xlab("Co-Methylation modules") +
+  labs(title=paste("Enrichment for:", df_name)) +
+  coord_flip() 
+
+  fisher_plot
+
+  #ggsave("XXXX", fisher_plot, width = 8, height = 11)
+  
+}
+```
+
+```{r Supplementary Figure 1}
+
+#Supplementary Figure 1a
+##using MSet in the glial fraction
+library(wateRmelon)
+outliers <- outlyx(MSet, iqr=TRUE, iqrP=2, pc=1,
+                   mv=TRUE, mvP=0.15, plot=TRUE) # one bad sample detected in the glial fraction
+
+#Supplementary Figure 1b
+sampleTree = hclust(dist(datExpr0), method = "average")
+
+sizeGrWindow(12,9) #graphic output window
+par(cex = 0.6)
+par(mar = c(0,4,2,0))
+plot(sampleTree, main = "Sample clustering to detect outliers - Neuronal", sub="", xlab="", cex.lab = 1.5, 
+     cex.axis = 1.5, cex.main = 2)
+
+##Plot a line to show the cut if outlier is detected
+abline(h = 310, col = "red")
+
+```
+
+```{r Supplementary Figure 2}
+#EWCE - cell enrichment 
+library(EWCE)
+library(ewceData)
+library(SingleCellExperiment)
+library(textshape)
+library(readxl)
+library(ggplot2)
+
+library(ewceData)
+
+# Load the single cell data
+ctd <- ewceData::ctd()
+
+#Load in geneInfoK from neuronal network
+geneInfo <- geneInfoK
+bg <- as.character(geneInfo$geneSymbol)
+modules <- unique(geneInfo$moduleColor)
+x_results_list <- list()
+x_results2 <- list()
+ 
+#----------------------
+
+for(i in modules[1:length(unique(geneInfo$moduleColor))]){
+  print(i)
+  x <- subset(geneInfo, moduleColor == i)
+  x_genes <- x[,3]
+print(length(x_genes))
+ #Running the enrichment 
+  reps=1000
+  subCellStatus=TRUE 
+  x_results <- EWCE::bootstrap_enrichment_test(sct_data = ctd,
+                                                sctSpecies = "mouse",
+                                                genelistSpecies = "human",
+                                                hits = x_genes, 
+                                                reps = reps,
+                                                bg=bg,
+                                                annotLevel = 1)
+  x_results$results$Module <- paste(i)
+  x_results_list[[i]] <- x_results
+  x_results2[[i]] <- x_results$results
+  }
+
+EWCE <- do.call(rbind, x_results_list)
+EWCE_2 <- do.call(rbind, x_results2)
+
+
+
+EWCE_2$list = paste(EWCE_2$Module)
+
+
+EWCE_results <- EWCE_2
+EWCE_results$significant <- paste("Null")
+
+for(i in 1:nrow(EWCE_results)){
+  if(EWCE_results$q[i] < 0.05){
+    EWCE_results$significant[i] <- paste("Significant")
+  }
+  else if(EWCE_results$q[i] > 0.05){
+    EWCE_results$significant[i] <- paste("Not significant")
+  }
+}
+
+EWCE_results$SD <- EWCE_results$sd_from_mean
+for(i in 1:nrow(EWCE_results)){
+  if(EWCE_results$sd_from_mean[i] >0){
+    EWCE_results$SD[i] <- paste(EWCE_results$sd_from_mean[i])
+  }
+  else if(EWCE_results$sd_from_mean[i] < 0){
+    EWCE_results$SD[i] <- paste(0)
+  }
+}
+EWCE_results$SD <- as.numeric(EWCE_results$SD)
+
+ggplot(EWCE_results, aes(x=Module, y=CellType, color = significant, size = SD))+ theme_bw() +
+  geom_point()+ theme(axis.text.x = element_text(angle=45, hjust=1))+ scale_color_manual(values = c("Significant" = "midnightblue","Not significant"="lightblue"))
+
+```
