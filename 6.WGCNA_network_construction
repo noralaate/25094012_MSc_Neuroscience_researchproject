@@ -1,1 +1,568 @@
+```{r Packages}
+library(WGCNA)
+library(dplyr)
+#library(tibble)
+```
 
+```{r Reloading sample sheet, and removing AD samples}
+SampleSheet <- read.csv("SampleSheet_G2_final.csv" )
+
+#Excluding AD samples from sample sheet and methylation data
+AD_samples <- c("AD1_G", "AD2_G", "AD3_G", "AD4_G", "AD5_G", "AD6_G", "AD7_G", "AD8_G")
+SampleSheet_FTLD <- SampleSheet[!(SampleSheet$Sample_Name %in% AD_samples),]
+
+mAdj_network <- mAdj[, !(colnames(mAdj) %in% AD_samples)]
+```
+
+```{r Keep probes that map to genes}
+
+probe.genes<-subset(probe.features, probe.features$feature!="IGR")
+
+dim(probe.genes)
+
+mAdj_genes <- subset(mAdj_network, rownames(mAdj_network) %in% rownames(probe.genes))
+dim(mAdj_genes)
+
+```
+
+```{r}
+options(stringsAsFactors = FALSE)
+```
+
+```{r Selecting top 10% most variable probes}
+
+data <- as.data.frame(mAdj_genes)
+#Calculate variance for each probe
+data$v <- apply(data, 1, var) 
+dim(data)
+
+#Select the 10% most variable probes
+data2 <- data[data$v >= quantile(data$v, c(.90)), ] 
+dim(data2) #check dim after filtering
+
+#Remove variance column and transpose data so samples are rows
+datExpr0 = as.data.frame(t(data2[,-29]))
+
+```
+
+```{r}
+gsg = goodSamplesGenes(datExpr0, verbose = 3)
+gsg$allOK #if returns true then all good to proceed
+```
+
+```{r Sample tree}
+
+sampleTree = hclust(dist(datExpr0), method = "average")
+
+sizeGrWindow(12,9) #graphic output window
+par(cex = 0.6)
+par(mar = c(0,4,2,0))
+plot(sampleTree, main = "Sample clustering to detect outliers - Glial", sub="", xlab="", cex.lab = 1.5, 
+     cex.axis = 1.5, cex.main = 2)
+
+#Indicate cut height used to identify potential outliers
+abline(h = 230, col = "red")
+#One sample was removed in neuronal fraction using abline(h=310)
+```
+
+```{r}
+#Identifying sample clusters using selected cut height
+clust = cutreeStatic(sampleTree, cutHeight = 230, minSize = 10)
+table(clust)
+
+#Keep samples belonging to the main cluster
+keepSamples = (clust==1)
+datExpr = datExpr0[keepSamples, ]
+dim(datExpr)
+
+#Define the number of genes and samples
+nGenes = ncol(datExpr)
+nSamples = nrow(datExpr)
+```
+
+```{r SVD - investigating covariates}
+
+madj_clean <- as.data.frame(datExpr)
+madj_clean <- t(madj_clean)
+
+champ.SVD(beta=as.data.frame(madj_clean), pd = datTraits)
+
+```
+
+```{r}
+#Use filtered sample sheet as the trait data
+traitData = SampleSheet_FTLD
+dim(traitData)
+names(traitData)
+
+#-----
+
+library(dplyr)
+library(tibble)
+
+#Create WCNA-compatible trait data frame
+trait_wgcna <- traitData %>%
+  mutate(
+    # Binary disease variables (1 = yes, 0 = no)
+    FTLD_TDPAc9 = ifelse(Sample_Group == "FTLD-TDPAc9_G", 1, 0),
+    FTLD_TDPAs = ifelse(Sample_Group == "FTLD-TDPAs_G", 1, 0),
+    FTLD_TDPC = ifelse(Sample_Group == "FTLD-TDPC_G", 1, 0),
+    Disease_status = ifelse(Sample_Group == "CTRL_G", 0, 1),
+    
+    Sex = ifelse(Sex == "M", 1, 0)
+  ) %>%
+  dplyr::select(
+    Sample_Name,
+    FTLD_TDPAc9,
+    FTLD_TDPAs,
+    FTLD_TDPC,
+    Disease_status,
+    Age,
+    Sex,
+    PMI_min
+  ) 
+
+rownames(trait_wgcna) <- trait_wgcna$Sample_Name
+```
+
+```{r}
+
+alltraits <- trait_wgcna
+
+Samples <- rownames(datExpr)
+
+#Match trait data to order of samples in datExpr
+traitRows <- match(Samples, alltraits$Sample_Name)
+
+datTraits <- alltraits[traitRows, ]
+
+rownames(datTraits) <- datTraits$Sample_Name
+
+#Remove sample name column
+datTraits <- datTraits[, -1]
+
+```
+
+```{r Dendogram}
+#Re-cluster samples
+sampleTree2 = hclust(dist(datExpr), method = "average")
+
+# Convert traits to a color representation: white means low, red means high, grey means missing entry
+traitColors = numbers2colors(datTraits, signed = FALSE)
+
+# Plot the sample dendrogram and the colors underneath.
+plotDendroAndColors(sampleTree2, traitColors,
+                    groupLabels = names(datTraits), 
+                    main = "Sample dendrogram and trait heatmap")
+```
+
+```{r}
+save(datExpr, datTraits, file = "datExpr_trait_nora.RData")
+```
+
+```{r}
+lnames = load(file = "datExpr_trait_nora.RData")
+#The variable lnames contains the names of loaded variables.
+lnames
+```
+
+```{r Choosing soft-threshold}
+
+powers = c(c(1:10), seq(from = 12, to=20, by=2)) #as per tutorial
+
+#Define candidate soft-thresholding powers
+sft = pickSoftThreshold(datExpr, powerVector = powers, verbose = 5, 
+                        networkType ="signed") 
+
+# Plot the results:
+sizeGrWindow(12, 9)
+par(mfrow = c(1,2))
+cex1 = 0.9
+
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+     main = paste("Scale independence"));
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels=powers,cex=cex1,col="red");
+# this line corresponds to using an R^2 cut-off of h
+abline(h=0.80,col="red")
+
+# Mean connectivity as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+     xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+```
+
+```{r}
+#Construct weighted gene correlation network and identify modules
+#collectGarbage()
+cor <- WGCNA::cor
+
+bwnet = blockwiseModules(datExpr, maxBlockSize = 10000,
+                         power = 10, networkType = "signed", minModuleSize = 300,
+                         deepSplit = 2, #change from 2 to 4 to detect modules that are less distinct
+                         reassignThreshold = 1e-6, mergeCutHeight = 0.1,
+                         numericLabels = TRUE,
+                         corType = "pearson",
+                         maxPOutliers = 1,
+                         saveTOMs = TRUE,
+                         saveTOMFileBase = "TOM-blockwise",
+                         verbose = 5)
+
+cor <- stats::cor
+```
+
+```{r}
+bwnet$colors #modules
+bwnet$MEs #module eigen genes
+head(bwnet)
+```
+
+```{r Dendrogram and module colors}
+
+table(bwnet$colors)
+# Convert labels to colors for plotting
+bwModuleColors = labels2colors(bwnet$colors)
+table(bwModuleColors)
+# open a graphics window
+sizeGrWindow(6,6)
+# Plot the dendrogram and the module colors underneath for block 1
+plotDendroAndColors(bwnet$dendrograms[[1]], bwModuleColors[bwnet$blockGenes[[1]]],
+                    "Module colors", main = "Gene dendrogram and module colors in block 1",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05)
+# Plot the dendrogram and the module colors underneath for block 2
+plotDendroAndColors(bwnet$dendrograms[[2]], bwModuleColors[bwnet$blockGenes[[2]]],
+                    "Module colors", main = "Gene dendrogram and module colors in block 2",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05)
+# Plot the dendrogram and the module colors underneath for block 3
+plotDendroAndColors(bwnet$dendrograms[[3]], bwModuleColors[bwnet$blockGenes[[3]]],
+                    "Module colors", main = "Gene dendrogram and module colors in block 3",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05)
+                
+```
+
+```{r}
+#Extract module information and save 
+moduleLabels = bwnet$colors
+moduleColors = labels2colors(bwnet$colors)
+MEs = bwnet$MEs
+geneTree = bwnet$dendrograms;
+save(MEs, moduleLabels, moduleColors, geneTree, 
+     file = "networkConstruction-auto.RData")
+
+```
+
+```{r Quantify model trait associations}
+# Re-define numbers of genes and samples
+nGenes = ncol(datExpr)
+nSamples = nrow(datExpr)
+
+# Recalculate MEs with color labels
+MEs0 = moduleEigengenes(datExpr, moduleColors)$eigengenes
+MEs = orderMEs(MEs0)
+moduleTraitCor = cor(MEs, datTraits, use = "p")
+moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples)
+
+sizeGrWindow(16,8)
+# Will display correlations and their p-values
+textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
+                   signif(moduleTraitPvalue, 1), ")", sep = "");
+dim(textMatrix) = dim(moduleTraitCor)
+par(mar = c(6, 10, 3, 1))
+# Display the correlation values within a heatmap plot
+
+labeledHeatmap(Matrix = moduleTraitCor,
+               xLabels = names(datTraits),
+               yLabels = names(MEs),
+               ySymbols = names(MEs),
+               colorLabels = FALSE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrix,
+               setStdMargins = FALSE,
+               cex.text = 0.5,
+               cex.lab = 0.5,
+               zlim = c(-1,1),
+               main = paste("Module-trait relationships"))
+```
+
+```{r Applying k-means}
+library(CoExpNets)
+
+bwnet$moduleColors = bwnet$colors
+
+#Apply k-means clustering to refine module assignments
+
+NetK <- applyKMeans("FTCX", bwnet, datExpr, n.iterations = 20, debug = F,
+                    n.debug = 500, net.type = "signed", min.exchanged.genes = 20,
+                    excludeGrey = F)
+
+#Copy of trait data for the k-means analysis
+traitData_K = datTraits
+dim(traitData_K)
+names(traitData_K)
+
+Samples <- rownames(datExpr)
+
+traitData_K$Sample_Name <- rownames(traitData_K)
+
+allTraits_K <- as.data.frame(allTraits_K)
+rownames(allTraits_K) <- allTraits_K$Sample_Name
+
+allTraits_K <- subset(allTraits_K, Sample_Name %in% Samples)
+traitRows <- match(Samples, allTraits_K$Sample_Name)
+datTraits_K <- allTraits_K
+#rownames(datTraits_K) = allTraits_K[traitRows, 1]
+
+```
+
+```{r Adding in trait data}
+
+control_samples <- c("CTRL5_G", "CTRL7_G", "CTRL9_G", "CTRL10_G", "CTRL11_G",
+                     "CTRL13_G", "CTRL14_G", "CTRL15_G", "CTRL16_G")
+datTraits_K$Disease_status <- paste("1")
+datTraits_K$Disease_status[datTraits_K$Sample_Name %in% control_samples] <- paste("0")
+
+
+FTLD_TDPAc9_samples <- c("FTLD1_G", "FTLD6_G", "FTLD9_G", "FTLD12_G", "FTLD14_G",
+                         "FTLD16_G", "FTLD24_G")
+datTraits_K$FTLD_TDPAc9 <- NA_real_
+datTraits_K$FTLD_TDPAc9[datTraits_K$Sample_Name %in% FTLD_TDPAc9_samples] <- paste("1")
+datTraits_K$FTLD_TDPAc9[datTraits_K$Sample_Name %in% control_samples] <- paste("0")
+
+
+FTLD_TDPAs_samples <- c("FTLD10_G", "FTLD13_G", "FTLD15_G", "FTLD17_G", "FTLD18_G",
+                         "FTLD21_G", "FTLD23_G")
+datTraits_K$FTLD_TDPAs <- NA_real_
+datTraits_K$FTLD_TDPAs[datTraits_K$Sample_Name %in% FTLD_TDPAs_samples] <- paste("1")
+datTraits_K$FTLD_TDPAs[datTraits_K$Sample_Name %in% control_samples] <- paste("0")
+
+
+FTLD_TDPC_samples <- c("FTLD3_G", "FTLD7_G", "FTLD11_G", "FTLD20_G", "FTLD22_G")
+datTraits_K$FTLD_TDPC <- NA_real_
+datTraits_K$FTLD_TDPC[datTraits_K$Sample_Name %in% FTLD_TDPC_samples] <- paste("1")
+datTraits_K$FTLD_TDPC[datTraits_K$Sample_Name %in% control_samples] <- paste("0")
+
+
+datTraits0_K <- datTraits_K[,c(4, 1:3)]
+```
+
+```{r Quantifying module-trait associations}
+
+#Convert trait variables to numeric values for correlation analysis
+datTraits0_K <- datTraits0_K %>%
+  mutate(across(c(FTLD_TDPAc9, FTLD_TDPAs, FTLD_TDPC, Disease_status),
+                ~ as.numeric(.)))
+
+
+MEsK = orderMEs(NetK$MEs)
+moduleTraitCorK = cor(MEsK, as.matrix(datTraits0_K), use = "p")
+moduleTraitPvalueK = corPvalueStudent(moduleTraitCorK, nSamples)
+
+sizeGrWindow(16,8)
+# Will display correlations and their p-values
+textMatrixK = paste(signif(moduleTraitCorK, 2), "\n(",
+                    signif(moduleTraitPvalueK, 1), ")", sep = "");
+dim(textMatrixK) = dim(moduleTraitCorK)
+par(mar = c(6, 18, 3, 2))
+
+# Display the correlation values within a heatmap plot
+
+labeledHeatmap(Matrix = moduleTraitCorK,
+               xLabels = names(datTraits0_K),
+               yLabels = names(MEsK),
+               ySymbols = names(MEsK),
+               colorLabels = FALSE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrixK,
+               setStdMargins = TRUE,
+               cex.text = 1,
+               cex.lab = 1,
+               zlim = c(-1,1),
+               main = paste("Module-trait relationships (k-means) Glia"))
+
+dev.off()
+```
+
+```{r Starting on gene info data frame}
+MEs <- MEsK
+#Extract disease status as separate data frame
+Disease_Status = as.data.frame(datTraits$Disease_status)
+names(Disease_Status) = "Disease_Status"
+
+#--------MODULES--------------
+#Extract module names from module eigengene labels
+modNames = substring(names(MEs), 3) #Module names
+
+#Calculate module membership correlations between methylation values and module eigengenes
+geneModuleMembership = as.data.frame(cor(datExpr, MEs, use = "p"))
+
+MMPvalue = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples)) #p values
+
+#Rename module membership columns
+names(geneModuleMembership) = paste("MM", modNames, sep="")
+
+names(MMPvalue) = paste("p.MM", modNames, sep="")
+
+#--------DISEASE status-------------
+#Calculate CpG-trait correlations between methylation values and disease status
+geneTraitSignificance = as.data.frame(cor(datExpr, Disease_Status, use = "p"))
+
+GSPvalue = as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples)) # p values
+
+names(geneTraitSignificance) = paste("GS.", names(Disease_Status), sep="")
+names(GSPvalue) = paste("p.GS.", names(Disease_Status), sep="")
+
+```
+
+```{r With applyed K-means}
+
+modNamesK = substring(names(MEsK), 3) #Module names
+
+geneModuleMembershipK = as.data.frame(cor(datExpr, MEsK, use = "p")) #correlation between m values and the module eigengene
+
+MMPvalueK = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembershipK), nSamples)) #p value
+
+names(geneModuleMembershipK) = paste("MM", modNamesK, sep="")
+names(MMPvalueK) = paste("p.MM", modNamesK, sep="")
+```
+
+```{r}
+
+probes <- colnames(datExpr) #cpgs
+probes2annot = match(probes, rownames(probe.features))
+
+# The following is the number or probes without annotation:
+sum(is.na(probes2annot))
+
+# Should return 0.
+
+geneInfo0K = data.frame(Probes = probes,
+                        geneSymbol = probe.features$gene[probes2annot],
+                        CHR = probe.features$CHR[probes2annot],
+                        feature = probe.features$feature[probes2annot],
+                        cgi = probe.features$cgi[probes2annot],
+                        moduleColor = NetK$moduleColors,
+                        geneTraitSignificance,
+                        GSPvalue)
+```
+
+```{r geneinfoK data frame}
+# Order modules by their absolute correlation with disease status
+modOrderK = order(-abs(cor(MEsK, Disease_Status, use = "p")))
+
+# Add module membership information in the chosen order
+for (mod in 1:ncol(geneModuleMembershipK))
+{
+  oldNames = names(geneInfo0K)
+  geneInfo0K = data.frame(geneInfo0K, geneModuleMembershipK[, modOrderK[mod]],
+                          MMPvalueK[, modOrderK[mod]]);
+  names(geneInfo0K) = c(oldNames, paste("MM.", modNamesK[modOrderK[mod]], sep=""),
+                        paste("p.MM.", modNamesK[modOrderK[mod]], sep=""))
+}
+# Order the genes in the geneInfo variable first by module color, then by geneTraitSignificance
+geneOrderK = order(geneInfo0K$moduleColor, -abs(geneInfo0K$GS.Disease_Status))
+geneInfoK = geneInfo0K[geneOrderK, ]
+
+```
+
+```{r}
+#Save gene information as a CSV file
+write.csv(geneInfoK, file = "geneInfoK.csv")
+```
+
+```{r Preparing for EWCE}
+#EWCE - cell enrichment 
+library(EWCE)
+library(ewceData)
+library(SingleCellExperiment)
+library(textshape)
+library(readxl)
+library(ggplot2)
+
+library(ewceData)
+
+# Load the single cell data
+ctd <- ewceData::ctd()
+
+#significant modules
+library(stringr)
+moduleTraitPvalueK <- as.data.frame(moduleTraitPvalueK)
+sigmod_glia <- subset(moduleTraitPvalueK, Disease_status < (0.05/29)) #have 29 modules in the glial network, Bonferroni
+sigmod_glia <- rownames(sigmod_glia)
+sigmod_glia <- str_remove_all(sigmod_glia, "ME")
+sigmod_glia
+
+### Lists of FTLD genes in modules 
+
+allsigmods <- c("greenyellow", "lightyellow", "tan", "magenta", "darkgreen", "red", "darkturquoise", "pink", "white", "yellow", "green",
+                "purple", "salmon", "lightgreen", "black", "blue", "grey60", "brown", "darkgrey", "darkred", "orange")
+
+
+geneInfo <- geneInfoK
+bg = as.character(geneInfo$geneSymbol)
+modules <- allsigmods
+x_results_list <- list()
+x_results2 <- list()
+```
+
+```{r EWCE}
+
+for(i in modules[1:length(unique(allsigmods))]){
+  print(i)
+  x <- subset(geneInfo, moduleColor == i)
+  x_genes <- x[,2]
+print(length(x_genes))
+ #Running the enrichment 
+  reps=1000
+  subCellStatus=TRUE 
+  x_results <- EWCE::bootstrap_enrichment_test(sct_data = ctd,
+                                                sctSpecies = "mouse",
+                                                genelistSpecies = "human",
+                                                hits = x_genes, 
+                                                reps = reps,
+                                                bg=bg,
+                                                annotLevel = 1)
+  x_results$results$Module <- paste(i)
+  x_results_list[[i]] <- x_results
+  x_results2[[i]] <- x_results$results
+  }
+
+EWCE <- do.call(rbind, x_results_list)
+EWCE_2 <- do.call(rbind, x_results2)
+
+
+
+EWCE_2$list = paste(EWCE_2$Module)
+
+
+EWCE_results <- EWCE_2
+EWCE_results$significant <- paste("Null")
+
+for(i in 1:nrow(EWCE_results)){
+  if(EWCE_results$q[i] < 0.05){
+    EWCE_results$significant[i] <- paste("Significant")
+  }
+  else if(EWCE_results$q[i] > 0.05){
+    EWCE_results$significant[i] <- paste("Not significant")
+  }
+}
+
+EWCE_results$SD <- EWCE_results$sd_from_mean
+for(i in 1:nrow(EWCE_results)){
+  if(EWCE_results$sd_from_mean[i] >0){
+    EWCE_results$SD[i] <- paste(EWCE_results$sd_from_mean[i])
+  }
+  else if(EWCE_results$sd_from_mean[i] < 0){
+    EWCE_results$SD[i] <- paste(0)
+  }
+}
+EWCE_results$SD <- as.numeric(EWCE_results$SD)
+
+ggplot(EWCE_results, aes(x=Module, y=CellType, color = significant, size = SD))+ theme_bw() + theme(plot.title = element_text(hjust = 0.5)) + ggtitle("EWCE - Glia") + geom_point()+ theme(axis.text.x = element_text(angle=45, hjust=1))+ scale_color_manual(values = c("Significant" = "midnightblue","Not significant"="lightblue"))
+
+```
